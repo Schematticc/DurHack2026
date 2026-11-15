@@ -1,13 +1,14 @@
 {% extends "base.html" %}
 
 {% block title %}Recipes | Meal Planner{% endblock %}
+{% block mobile_title %}Recipes{% endblock %}
 
 {% block content %}
 <div class="mb-3">
     <label for="budget" class="form-label">Budget for the week:</label>
     <div class="input-group mb-3">
         <span class="input-group-text">£</span>
-            <input type="number" class="form-control" id="budget" aria-describedby="budgetHelp" placeholder="Enter budget">
+        <input type="number" class="form-control" id="budget" aria-describedby="budgetHelp" placeholder="Enter budget">
     </div>
 </div>
 <button id="genButton" type="button" class="btn btn-primary">
@@ -18,38 +19,168 @@
 </button>
 
 <script>
+    let currentRecipes = [];
+
     document.getElementById("genButton").addEventListener("click", GenerateRecipes);
     document.getElementById("budget").addEventListener("keyup", KeyPress);
+
     function KeyPress(event) {
-        if (event.key == "Enter"){
+        if (event.key == "Enter") {
             GenerateRecipes(event);
         }
     }
+
     async function GenerateRecipes(event) {
-        document.getElementById("genSpinner").style.display = ""
+        document.getElementById("genSpinner").style.display = "";
 
-        const params = new URLSearchParams({budget: document.getElementById("budget").value});
+        const budgetInput = document.getElementById("budget");
+        const params = new URLSearchParams({budget: budgetInput.value});
 
-        const response = await fetch(`/api/recipeGenerate?${params}`);
-        const data = await response.json();
-        console.log(data)
-        let recipes = ""
-        for (let i = 1; i < 8; i++){
-            recipes = recipes + "<h2>" + data.recipeNames[i - 1] + "</h2><ul>";
-            for (let j = 0; j < data.ingredients[i - 1].length; j++) {
-                recipes = recipes + "<li>" + data.ingredients[i - 1][j] + "</li>";
-            } 
-            recipes = recipes +  `</ul>
-            <p class="d-inline-flex gap-1">
-            <button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#collapse-${i}">Recipe</button>
-            </p>
-            <div id="collapse-${i}" class="collapse">
-            <div class="card card-body">${data.instructions[i - 1]}</div>
-            </div>`;         
+        try {
+            const response = await fetch(`/api/recipeGenerate?${params}`);
+            const data = await response.json();
+
+            if (!response.ok || (data && data.error)) {
+                const errMsg = (data && data.error) ? data.error : "Failed to generate recipes. Please try again.";
+                if (window.showToast) {
+                    window.showToast(errMsg, "danger");
+                } else {
+                    alert(errMsg);
+                }
+                return;
+            }
+
+            let recipesHtml = "";
+
+            if (Array.isArray(data)) {
+                currentRecipes = data;
+                data.forEach((item, index) => {
+                    const i = index + 1;
+                    const name = item.recipe_name || "Recipe " + i;
+                    const ingredients = item.ingredients || [];
+                    const instructions = item.recipe || item.instructions || [];
+
+                    recipesHtml += "<h2>" + name + "</h2><ul class='mb-2'>";
+                    for (let j = 0; j < ingredients.length; j++) {
+                        const ing = ingredients[j];
+                        if (typeof ing === "object" && ing !== null) {
+                            const ingName = ing.name || ing.item || "";
+                            if (ing.in_pantry) {
+                                recipesHtml += `<li><span class="text-success fw-medium">${ingName}</span> <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle ms-1"><i class="bi bi-check2"></i> In pantry</span></li>`;
+                            } else {
+                                recipesHtml += `<li><span>${ingName}</span> <span class="badge bg-light text-muted border ms-1">Need to buy</span></li>`;
+                            }
+                        } else {
+                            recipesHtml += `<li>${ing}</li>`;
+                        }
+                    }
+                    recipesHtml += "</ul>";
+
+                    let instructionsContent = "";
+                    if (Array.isArray(instructions)) {
+                        instructionsContent = '<ol class="mb-0 ps-3">' + instructions.map(step => "<li>" + step + "</li>").join("") + "</ol>";
+                    } else if (typeof instructions === "string") {
+                        instructionsContent = instructions.replace(/\n/g, "<br>");
+                    }
+
+                    recipesHtml += `
+                    <p class="d-inline-flex gap-2">
+                        <button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#collapse-${i}">Recipe</button>
+                        <button class="btn btn-outline-success" type="button" id="save-btn-${i}" onclick="PickRecipe(${index})">
+                            <i class="bi bi-plus-lg me-1"></i>Save Recipe
+                        </button>
+                    </p>
+                    <div id="collapse-${i}" class="collapse">
+                        <div class="card card-body mb-3">${instructionsContent}</div>
+                    </div>`;
+                });
+            } else if (data && data.recipeNames) {
+                // Fallback for legacy format
+                currentRecipes = data.recipeNames.map((name, idx) => ({
+                    recipe_name: name,
+                    ingredients: (data.ingredients && data.ingredients[idx]) || [],
+                    instructions: (data.instructions && data.instructions[idx]) || []
+                }));
+                for (let i = 1; i <= data.recipeNames.length; i++) {
+                    recipesHtml += "<h2>" + data.recipeNames[i - 1] + "</h2><ul>";
+                    const ing = data.ingredients[i - 1] || [];
+                    for (let j = 0; j < ing.length; j++) {
+                        recipesHtml += "<li>" + ing[j] + "</li>";
+                    }
+                    recipesHtml += `</ul>
+                    <p class="d-inline-flex gap-2">
+                        <button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#collapse-${i}">Recipe</button>
+                        <button class="btn btn-outline-success" type="button" id="save-btn-${i}" onclick="PickRecipe(${i - 1})">
+                            <i class="bi bi-plus-lg me-1"></i>Save Recipe
+                        </button>
+                    </p>
+                    <div id="collapse-${i}" class="collapse">
+                        <div class="card card-body mb-3">${data.instructions[i - 1]}</div>
+                    </div>`;
+                }
+            }
+
+            document.getElementById("recipes").innerHTML = recipesHtml;
+        } catch (error) {
+            console.error("Error generating recipes:", error);
+            if (window.showToast) {
+                window.showToast("Failed to connect to recipe generator. Please try again.", "danger");
+            } else {
+                alert("Failed to connect to recipe generator. Please try again.");
+            }
+        } finally {
+            document.getElementById("genSpinner").style.display = "none";
         }
+    }
 
-        document.getElementById("genSpinner").style.display = "none"
-        document.getElementById("recipes").innerHTML = recipes;
+    async function PickRecipe(index) {
+        const item = currentRecipes[index];
+        if (!item) return;
+
+        const btn = document.getElementById(`save-btn-${index + 1}`);
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Saving...`;
+
+        try {
+            const response = await fetch("/api/saveRecipe", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    recipe_name: item.recipe_name,
+                    ingredients: item.ingredients,
+                    instructions: item.recipe || item.instructions
+                })
+            });
+
+            const result = await response.json();
+            if (response.ok && result.success) {
+                btn.className = "btn btn-success";
+                btn.innerHTML = `<i class="bi bi-check-lg me-1"></i>Saved`;
+                if (window.showToast) {
+                    window.showToast(result.message || `Saved '${item.recipe_name}' to your recipes.`, "success");
+                }
+            } else {
+                btn.disabled = false;
+                btn.className = "btn btn-outline-danger";
+                btn.innerHTML = `<i class="bi bi-exclamation-circle me-1"></i>Retry`;
+                const msg = result.error || "Failed to save recipe";
+                if (window.showToast) {
+                    window.showToast(msg, "danger");
+                } else {
+                    alert(msg);
+                }
+            }
+        } catch (err) {
+            console.error(err);
+            btn.disabled = false;
+            btn.className = "btn btn-outline-danger";
+            btn.innerHTML = `<i class="bi bi-exclamation-circle me-1"></i>Retry`;
+            if (window.showToast) {
+                window.showToast("An unexpected error occurred while saving the recipe.", "danger");
+            }
+        }
     }
 </script>
 <div id="recipes"></div>
